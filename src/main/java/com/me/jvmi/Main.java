@@ -3,339 +3,280 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-
 package com.me.jvmi;
 
-import com.sun.org.apache.xerces.internal.impl.xs.XSConstraints;
+import com.me.jvmi.ProductImages.ProductImage;
+import java.io.IOException;
+import org.jvmi.automator.luminate.ECommerceProduct;
+import org.jvmi.automator.dpcs.DPCSClient;
+import java.math.BigDecimal;
+import java.nio.charset.Charset;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import org.openqa.selenium.By;
-import org.openqa.selenium.Keys;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
-import org.openqa.selenium.firefox.FirefoxDriver;
-import org.openqa.selenium.interactions.Actions;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
+import org.jvmi.automator.dpcs.DPCSItem;
+import org.jvmi.automator.luminate.LuminateOnlineClient;
 
 /**
  *
  * @author jbeckstrom
  */
 public class Main {
-    
-    
-    
-    public static void main(String[] args){
-        
+
+    public static void main(String[] args) throws IOException {
+
         String username = args[0];
         String password = args[1];
+
+//        EcommerceAdmin ecommerceAdmin = new EcommerceAdmin(driver, "https://secure2.convio.net/jvmi/admin/EcommerceAdmin");
+//        Product product = ecommerceAdmin.createProduct("test");
+//        ecommerceAdmin.updateProduct(product);
+//        
+//        System.out.println(client.productSearch("1823479128374"));
+//        System.out.println(client.doesProductExist("1823479128374"));
+        DPCSClient dpcs = new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvm");
         
-        WebDriver driver = new FirefoxDriver();
-        driver.manage().timeouts().implicitlyWait(10, TimeUnit.SECONDS);
+        LuminateFTPClient ftp = new LuminateFTPClient("customerftp.convio.net");
         
-        driver.get("https://secure2.convio.net/jvmi/admin/AdminLogin");
+        ProductImages images = new ProductImages(Paths.get("/Volumes/jvmpubfs/WEB/images/products/"), ftp);
+
+        Map<String, LuminateOnlineClient> luminateClients = new HashMap<>();
+        luminateClients.put("us", new LuminateOnlineClient("https://secure2.convio.net/jvmi/admin/"));
+        luminateClients.put("ca", new LuminateOnlineClient("https://secure3.convio.net/jvmica/admin/"));
+        luminateClients.put("uk", new LuminateOnlineClient("https://secure3.convio.net/jvmiuk/admin/"));
+
+        Map<String, EcommerceProductFactory> ecommFactories = new HashMap<>();
+        ecommFactories.put("us", new EcommerceProductFactory(dpcs, images, Categories.us));
+        ecommFactories.put("ca", new EcommerceProductFactory(dpcs, images, Categories.ca));
+        ecommFactories.put("uk", new EcommerceProductFactory(dpcs, images, Categories.uk));
         
-        WebElement usernameField = driver.findElement(By.cssSelector("input[id^='USERNAME'"));
-        WebElement passwordField = driver.findElement(By.cssSelector("input[id^='Password'"));
-        WebElement login = driver.findElement(By.id("login"));
+        List<String> countries = Arrays.asList("uk");//Arrays.asList("us", "ca", "uk");
+
         
-        usernameField.sendKeys(username);
-        passwordField.sendKeys(password);
-        
-        login.click();
-        
-        EcommerceAdmin ecommerceAdmin = new EcommerceAdmin(driver, "https://secure2.convio.net/jvmi/admin/EcommerceAdmin");
-        Product product = ecommerceAdmin.createProduct("test");
-        ecommerceAdmin.updateProduct(product);
+        List<InputRecord> records = new ArrayList<>();
+        records.add(new InputRecord(
+                "ISIS Exposed, book by Erick Stakelbeck",
+                "Who is ISIS? Where did this brutal terrorist group come from and what is driving its successful campaign of murder and conquest? In ISIS Exposed, veteran investigative reporter Erick Stakelbeck gets inside the story of the new caliphate and reveals just how clear and present a threat it is. ",
+                "9164",
+                "Television Program Offers",
+                Arrays.asList("Books > Books", "Jewish Voice Resources > Books", "Offers > Television", "Study Resources > Books"),
+                Arrays.asList("Copy of WPMS", "WP", "WPM", "WPMMS", "WPMS", "WPTV", "WP - CAN", "WPM - CAN", "WPMMS-CA", "WPMS-CA", "WPTV - CAN", "WP - UK", "WPM - UK", "WPMMS-UK", "WPMS-UK", "WPTV-UK"),
+                Collections.EMPTY_LIST));
+
+        for (InputRecord record : records) {
+            for(String country: countries){
+                EcommerceProductFactory ecommFactory = ecommFactories.get(country);
+                LuminateOnlineClient luminateClient = luminateClients.get(country);
+                luminateClient.login(username, password);
+                
+                ECommerceProduct product = ecommFactory.createECommerceProduct(record);
+                luminateClient.createOrUpdateProduct(product);
+            }
+        }
     }
     
-    public static class LuminateOnlineClient{
-        
-    }
-    
-    public static class EcommerceAdmin{
-        
-        private final String uri;
-        private final WebDriver driver;
-        
-        public EcommerceAdmin(WebDriver driver, String uri){
-            this.driver = driver;
-            this.uri = uri;
+    public static Collection<InputRecord> parseInput(Path csv) throws IOException{
+        Map<String, InputRecord> records = new HashMap<>();
+        CSVParser parser = CSVParser.parse(csv.toFile(), Charset.forName("UTF-8"), CSVFormat.EXCEL);
+        for(CSVRecord record: parser){
+            InputRecord input = new InputRecord(record);
+            records.put(input.getId(), input);
         }
         
-        public Product createProduct(String name){
-            driver.get(uri + "?prod_id=0&ecommerce=prod_create");
-            
-            WebElement nameField = driver.findElement(By.id("product_namename"));          
-            nameField.sendKeys(name);
-
-            driver.findElement(By.id("pstep_save-button")).click();
-            
-            String id = driver.findElement(By.id("prod_id")).getAttribute("value");
-            return new Product(id);
-        }
-        
-        public void updateProduct(Product product){
-//            doNameStep(product);
-//            doPricingStep(product);
-//            doCatalogInfoStep(product);
-//            doShortDescriptionStep(product);
-//            doFullDescriptionStep(product);
-            doStoresStep(product);
-        }
-        
-        private void doNameStep(Product product){
-            //https://secure2.convio.net/jvmi/admin/EcommerceAdmin?prod_id=0&ecommerce=prod_create
-            driver.get(uri + "?prod_id="+product.getId()+"&ecommerce=prod_create");
-            
-            WebElement nameField = driver.findElement(By.id("product_namename"));
-            WebElement externalIdField = driver.findElement(By.id("product_external_idname"));
-            
-            nameField.sendKeys(product.getName());
-            externalIdField.sendKeys(product.getExternalId());
-            
-            if(product.expires()){
-                WebElement enableExpirationDateCheckBox = driver.findElement(By.id("enable_expiration_datename"));
-                enableExpirationDateCheckBox.click();
-                
-                SelectElement expirationDateMonth = new SelectElement(
-                        driver.findElement(By.id("expiration_date_MONTH")), driver);
-                SelectElement expirationDateDay = new SelectElement(
-                        driver.findElement(By.id("expiration_date_DAY")), driver);
-                SelectElement expirationDateYear = new SelectElement(
-                        driver.findElement(By.id("expiration_date_YEAR")), driver);
-                
-                expirationDateMonth.selectOption(product.getExpirationMonth());
-                expirationDateDay.selectOption(product.getExpirationDay());
-                expirationDateYear.selectOption(product.getExpirationYear());
-            }
-            
-            driver.findElement(By.id("pstep_save-button")).click();
-        }
-        
-        private void doPricingStep(Product product){
-            driver.get(uri + "?prod_id="+product.getId()+"&ecommerce=prod_create_pricing");
-            
-            WebElement standardPriceField = driver.findElement(By.id("standard_priceinput"));
-            WebElement fairMarketValueField = driver.findElement(By.id("fair_market_valueinput"));
-            
-            standardPriceField.sendKeys(product.getStandardPrice());
-            fairMarketValueField.sendKeys(product.getFairMarketValue());
-            
-            driver.findElement(By.id("pstep_save-button")).click();
-        }
-        
-        private void doCatalogInfoStep(Product product){
-            //https://secure2.convio.net/jvmi/admin/EcommerceAdmin?prod_id=0&ecommerce=prod_create_catalog
-            driver.get(uri + "?prod_id="+product.getId()+"&ecommerce=prod_create_catalog");
-            
-            SelectElement productTypeSelect = new SelectElement(
-                    driver.findElement(By.id("product_type_sel")), driver);
-            productTypeSelect.selectOption(product.getType());
-            
-            for(int categoryId: product.getCategories()){
-                WebElement categoryCheckBox = driver.findElement(
-                        By.xpath("//input[@value='"+categoryId+"']/../input[@type='checkbox']"));
-                categoryCheckBox.click();
-            }
-            
-            driver.findElement(By.id("pstep_save-button")).click();
-        }
-        
-        private void doShortDescriptionStep(Product product){
-            //https://secure2.convio.net/jvmi/admin/EcommerceAdmin?prod_id=0&ecommerce=prod_create_short_desc
-            driver.get(uri + "?prod_id="+product.getId()+"&ecommerce=prod_create_short_desc");
-            
-            WebElement shortDescField = driver.findElement(By.id("product_short_descname"));
-            WebElement keywordsField = driver.findElement(By.id("product_search_keywordsname"));
-            WebElement fileInput = driver.findElement(By.cssSelector("input[type='file']"));
-            
-            shortDescField.sendKeys(product.getShortDesc());
-            keywordsField.sendKeys(product.getKeywords());
-            fileInput.sendKeys(product.getImagePath());
-            
-            driver.findElement(By.id("pstep_save-button")).click();
-        }
-        
-        private void doFullDescriptionStep(Product product){
-            driver.get(uri + "?prod_id="+product.getId()+"&ecommerce=prod_create_long_desc");
-        
-            WebElement textEditor = driver.findElement(By.linkText("Use Plain Text Editor"));
-            textEditor.click();
-
-            WebElement htmlTextArea = driver.findElement(By.id("Gprod_htmltextarea"));
-            htmlTextArea.sendKeys(product.getHtmlFullDesc());
-            
-            driver.findElement(By.id("pstep_save-button")).click();
-        }
-        
-        private void doStoresStep(Product product){
-            //https://secure2.convio.net/jvmi/admin/EcommerceAdmin?prod_id=0&ecommerce=prod_create_stores
-            driver.get(uri + "?prod_id="+product.getId()+"&ecommerce=prod_create_stores");
-        
-            WebElement removeAllButton = driver.findElement(By.id("product_stores_Remove_All"));
-            removeAllButton.click();
-            
-            SelectElement sourceList = new SelectElement(
-                    driver.findElement(By.id("product_stores_SourceList")), driver);
-            WebElement addSelectedButton = driver.findElement(By.id("product_stores_Add_Selected"));
-            sourceList.selectAll(product.getStores());
-            addSelectedButton.click();
-            
-            driver.findElement(By.id("pstep_save-button")).click();
-        }
         
     }
 
-    public static class SelectElement{
-        private final WebElement select;
-        private final WebDriver driver;
+    public static class EcommerceProductFactory {
 
-        public SelectElement(WebElement select, WebDriver driver) {
-            this.select = select;
-            this.driver = driver;
+        private final ProductImages images;
+        private final DPCSClient dpcs;
+        private final Categories categories;
+
+        public EcommerceProductFactory(DPCSClient dpcs, ProductImages images, Categories categories) {
+            this.dpcs = dpcs;
+            this.images = images;
+            this.categories = categories;
         }
+
+        public ECommerceProduct createECommerceProduct(InputRecord record) throws IOException {
+            final DPCSItem dpcsItem = dpcs.search(record.getId());
+            final ProductImage image = images.getProductImage(record.getId());
+
+            ECommerceProduct ret = new ECommerceProduct();
+            ret.setName(createProductName(record));
+            ret.setExternalId(record.getId());
+            ret.setStandardPrice(getStandardPrice(dpcsItem));
+            ret.setFairMarketValue(getFairMarketPrice(dpcsItem));
+            ret.setShortDesc(record.getDescription());
+            ret.setHtmlFullDesc(createFullDescriptionHtml(record, image.getUrl()));
+            ret.setType(record.getType());
+            ret.setImagePath(image.getPath());
+            ret.setStores(record.getStores());
+            ret.setCategories(getCategories(record));
+
+            return ret;
+        }
+
         
-        public void selectOption(String optionText){
-            List<WebElement> options = select.findElements(By.tagName("option"));
-            for(WebElement option: options){
-                if(option.getText().equalsIgnoreCase(optionText)){
-                    option.click();
-                    break;
+
+        private Set<Integer> getCategories(InputRecord record) {
+            Set<Integer> ret = new HashSet<>();
+            for (String category : record.getCategories()) {
+                String[] split = category.split("\\s*>\\s*");
+                String id = categories.lookup(split);
+                if (id != null) {
+                    ret.add(Integer.parseInt(id));
                 }
             }
+            return ret;
         }
-        
-        public void selectAll(Set<String> optionsText){
-            Actions shiftClick = new Actions(driver);
-            shiftClick = shiftClick.keyDown(Keys.SHIFT);
-            List<WebElement> options = select.findElements(By.tagName("option"));
-            for(WebElement option: options){
-                if(optionsText.contains(option.getText())){
-                    shiftClick = shiftClick.click(option);
+
+        private String createProductName(InputRecord record) {
+            return String.format("%s - %s", record.getId(), record.getName());
+        }
+
+        private BigDecimal getStandardPrice(DPCSItem dpcsItem) {
+            BigDecimal retail = dpcsItem.getRetailPrice();
+            BigDecimal offer = dpcsItem.getOfferPrice();
+            return retail.compareTo(BigDecimal.ZERO) == 0 ? offer : retail;
+        }
+
+        private BigDecimal getFairMarketPrice(DPCSItem dpcsItem) {
+            return dpcsItem.getFairMarketValue();
+        }
+
+        private String createFullDescriptionHtml(InputRecord record, String imageUrl) {
+            StringBuilder html = new StringBuilder();
+            if (record.isPackage()) {
+                for (InputRecord item : record.getItems()) {
+                    html.append(createShortDescriptionHtml(item, imageUrl));
                 }
+            } else {
+                html.append(createShortDescriptionHtml(record, imageUrl));
             }
-            shiftClick.keyUp(Keys.SHIFT).perform();
+            return html.toString();
         }
+
+        private String createShortDescriptionHtml(InputRecord record, String imageUrl) {
+            StringBuilder html = new StringBuilder();
+            if (imageUrl != null) {
+                html.append("<p>").append("<img style='max-width: 100%; height: auto; display: block;' src=").append(imageUrl).append(">").append("</p>");
+            }
+            html.append("<h2>").append(record.getName()).append("</h2>");
+            html.append("<p>").append(record.getDescription()).append("</p>");
+            return html.toString();
+        }
+
     }
-    
-    public static class ProductDate{
-        private String month;
-        private String day;
-        private String year;
 
-        public void setMonth(String month) {
-            this.month = month;
-        }
+    public static class InputRecord {
 
-        public void setDay(String day) {
-            this.day = day;
-        }
-
-        public void setYear(String year) {
-            this.year = year;
-        }
-
-        public String getMonth() {
-            return month;
-        }
-
-        public String getDay() {
-            return day;
-        }
-
-        public String getYear() {
-            return year;
-        }
-    }
-    
-    public static class Product{
-        
+        private final String name;
+        private final String description;
         private final String id;
-        private String name = "test product";
-        private String externalId = "1234";
-        private boolean expires = false;
-        private ProductDate expDate;
-        private String standardPrice = "100";
-        private String fairMarketValue = "40";
-        private String type = "Television Program Offers";
-        private int[] categories = {1044, 1038};
-        private String shortDesc = "this is a short description";
-        private String imagePath = "/Users/jbeckstrom/Desktop/index.jpg";
-        private String keywords = "test keyword";
-        private String htmlFullDesc = "<h1>header</h1><p>body</p>";
-        private Set<String> stores = new HashSet(Arrays.asList("WP", "WPM", "WPMMS", "WPMS"));
+        private final String type;
+        private final String keywords;
+        private final Set<String> packageIds = new HashSet<>();
+        private final Set<InputRecord> items = new HashSet<>();
+        private final Set<String> categories = new HashSet<>();
+        private final Set<String> stores = new HashSet<>();
 
-        public Product(String id){
+        public InputRecord(CSVRecord record){
+            name = record.get("name");
+            description = record.get("description");
+            id = record.get("id");
+            String itemIds = record.get("package ids");
+            if(!itemIds.isEmpty()){
+                packageIds.addAll(Arrays.asList(itemIds.split(";")));
+            }
+            type = record.get("type");
+            keywords = record.get("keywords");
+            categories.addAll(Arrays.asList(record.get("categories").split(";")));
+            stores.addAll(Arrays.asList(record.get("stores").split(";")));
+        }
+        
+        public InputRecord(String name, String description, String id, String type,
+                Collection<String> categories, Collection<String> stores, Collection<InputRecord> items) {
+            this.name = name;
+            this.description = description;
             this.id = id;
+            this.type = type;
+            this.categories.addAll(categories);
+            this.items.addAll(items);
+            this.stores.addAll(stores);
         }
-        
-        public String getId(){
-            return id;
-        }
-        
-        private String getName() {
+
+        public String getName() {
             return name;
         }
 
-        private String getExternalId() {
-            return externalId;
+        public String getDescription() {
+            return description;
         }
 
-        private boolean expires() {
-            return expires;
+        public String getId() {
+            return id;
         }
 
-        private String getExpirationMonth() {
-            return expDate.getMonth();
-        }
-
-        private String getExpirationDay() {
-            return expDate.getDay();
-        }
-
-        private String getExpirationYear() {
-            return expDate.getYear();
-        }
-
-        private String getStandardPrice() {
-            return standardPrice;
-        }
-
-        private String getFairMarketValue() {
-            return fairMarketValue;
-        }
-
-        private String getType() {
+        public String getType() {
             return type;
         }
 
-        private int[] getCategories() {
+        public boolean isPackage() {
+            return !items.isEmpty();
+        }
+
+        public Set<String> getCategories() {
             return categories;
         }
 
-        private String getShortDesc() {
-            return shortDesc;
+        public Set<InputRecord> getItems() {
+            return items;
+        }
+        
+        public void addItem(InputRecord item){
+            items.add(item);
         }
 
-        private String getImagePath() {
-            return imagePath;
-        }
-
-        private String getKeywords() {
-            return keywords;
-        }
-
-        private String getHtmlFullDesc() {
-            return htmlFullDesc;
-        }
-
-        private Set<String> getStores() {
+        public Set<String> getStores() {
             return stores;
+        }
+
+        public Set<String> getPackageIds() {
+            return packageIds;
         }
         
     }
-    
+
+    public static class InputData {
+
+        private final Map<String, InputRecord> records = new HashMap<>();
+
+        public InputData() {
+
+        }
+
+        public Collection<InputRecord> getRecords() {
+            return records.values();
+        }
+
+        public InputRecord getRecord(String id) {
+            return records.get(id);
+        }
+
+    }
+
 }
