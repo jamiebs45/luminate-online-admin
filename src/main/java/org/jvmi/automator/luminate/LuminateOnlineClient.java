@@ -26,7 +26,7 @@ public class LuminateOnlineClient {
 
     private final WebDriver driver;
     private final String uri;
-    
+
     private boolean loggedIn = false;
 
     public LuminateOnlineClient(String uri) {
@@ -36,7 +36,7 @@ public class LuminateOnlineClient {
     }
 
     public void login(String username, String password) {
-        if(loggedIn){
+        if (loggedIn) {
             return;
         }
         driver.get(uri + "AdminLogin");
@@ -221,11 +221,16 @@ public class LuminateOnlineClient {
     private void doFullDescriptionStep(ECommerceProduct product) {
         driver.get(uri + "EcommerceAdmin?prod_id=" + product.getId() + "&ecommerce=prod_create_long_desc");
 
-        WebElement textEditor = driver.findElement(By.linkText("Use Plain Text Editor"));
-        textEditor.click();
-
-        WebElement htmlTextArea = driver.findElement(By.id("Gprod_htmltextarea"));
-        clearAndSendKeys(htmlTextArea, product.getHtmlFullDesc());
+        try {
+            WebElement htmlTextArea = driver.findElement(By.id("Gprod_htmltextarea"));
+            clearAndSendKeys(htmlTextArea, product.getHtmlFullDesc());
+        } catch (Exception e) {
+            WebElement textEditor = driver.findElement(By.linkText("Use Plain Text Editor"));
+            textEditor.click();
+            
+            WebElement htmlTextArea = driver.findElement(By.id("Gprod_htmltextarea"));
+            clearAndSendKeys(htmlTextArea, product.getHtmlFullDesc());
+        }
 
         driver.findElement(By.id("pstep_save-button")).click();
     }
@@ -256,7 +261,7 @@ public class LuminateOnlineClient {
     }
 
     private void clearAndSendKeys(WebElement element, String text) {
-        if (text == null) {
+        if (text == null || text.isEmpty()) {
             return;
         }
         element.clear();

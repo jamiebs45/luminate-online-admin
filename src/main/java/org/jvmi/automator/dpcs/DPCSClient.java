@@ -48,7 +48,7 @@ public class DPCSClient {
     public DPCSItem search(String id){
         DPCSItem ret = cache.get(id);
         if(ret==null){
-            ret = fetch(id);
+            ret = itemLookup(id);
             cache.put(id, ret);
         }
         return ret;
@@ -65,6 +65,27 @@ public class DPCSClient {
         String fmv = driver.findElement(By.cssSelector("input[name='Price']")).getAttribute("value");
         String retail = driver.findElement(By.cssSelector("input[name='Retail']")).getAttribute("value");
         String offer = driver.findElement(By.cssSelector("input[name='FMV']")).getAttribute("value");
+        
+        final DPCSItem item = new DPCSItem();
+        item.setFairMarketValue(parseDouble(fmv));
+        item.setRetailPrice(parseDouble(retail));
+        item.setOfferPrice(parseDouble(offer));
+        return item;
+    }
+    
+    private DPCSItem itemLookup(String code){
+        //https://donor.dpconsulting.com/NewDDI/MainPage.asp?Head=InvLook.asp%3FPage%3DHead&Main=InvLook.asp%3FPage%3DMain
+        driver.get("https://donor.dpconsulting.com/NewDDI/MainPage.asp?Head=InvLook.asp%3FPage%3DHead&Main=InvLook.asp%3FPage%3DMain");
+        driver.switchTo().frame("Main");
+        
+        WebElement itemCodeField = driver.findElement(By.cssSelector("input[name='Code']"));
+        WebElement generateReport = driver.findElement(By.cssSelector("input[value='Generate Report']"));
+        itemCodeField.sendKeys(code);
+        generateReport.click();
+
+        String fmv = driver.findElement(By.xpath("//td[text()='Fair Market Value:']/../td[last()]")).getText();
+        String retail = driver.findElement(By.xpath("//td[text()='Retail Price:']/../td[last()]")).getText();
+        String offer = driver.findElement(By.xpath("//td[text()='Offer Amount:']/../td[last()]")).getText();
         
         final DPCSItem item = new DPCSItem();
         item.setFairMarketValue(parseDouble(fmv));

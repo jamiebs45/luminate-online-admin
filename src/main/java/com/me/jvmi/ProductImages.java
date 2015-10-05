@@ -32,20 +32,20 @@ public class ProductImages {
 
     public ProductImage getProductImage(String id) throws IOException {
         ProductImage ret = cache.get(id);
-        if(ret==null){
+        if (ret == null) {
             ret = create(id);
             cache.put(id, ret);
         }
         return ret;
     }
-    
-    private ProductImage create(String id) throws IOException{
+
+    private ProductImage create(String id) throws IOException {
         Path image = findImage(id);
-        if(image!=null){
-            String url = getImageUrl(image);
-            return new ProductImage(url, image);
+        if (image == null) {
+            throw new IllegalStateException("Could not find product image for id: "+id);
         }
-        return new ProductImage();
+        String url = getImageUrl(image);
+        return new ProductImage(url, image);
     }
 
     private String getImageUrl(Path image) throws IOException {
@@ -72,10 +72,10 @@ public class ProductImages {
         private final String url;
         private final Path path;
 
-        public ProductImage(){
+        public ProductImage() {
             this(null, null);
         }
-        
+
         public ProductImage(String url, Path path) {
             this.url = url;
             this.path = path;

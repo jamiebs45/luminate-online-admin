@@ -7,8 +7,7 @@ package com.me.jvmi;
 
 import com.me.jvmi.ProductImages.ProductImage;
 import java.io.IOException;
-import org.jvmi.automator.luminate.ECommerceProduct;
-import org.jvmi.automator.dpcs.DPCSClient;
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.charset.Charset;
 import java.nio.file.DirectoryStream;
@@ -21,13 +20,18 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
+import org.apache.commons.lang3.StringUtils;
+import org.jvmi.automator.dpcs.DPCSClient;
 import org.jvmi.automator.dpcs.DPCSItem;
+import org.jvmi.automator.luminate.ECommerceProduct;
 import org.jvmi.automator.luminate.LuminateOnlineClient;
 
 /**
@@ -35,23 +39,37 @@ import org.jvmi.automator.luminate.LuminateOnlineClient;
  * @author jbeckstrom
  */
 public class Main {
+    
+    /*
+    publish date
+    expiration date
+    priority
+    keywords
+    short description
+    excludes list
+    check for images only
+    intelligent error handling
+    */
 
     public static void main(String[] args) throws IOException {
 
-        String username = args[0];
-        String password = args[1];
+        final Path localProductImagesPath = Paths.get("/Users/jbeckstrom/Desktop/products/");//Paths.get("/Volumes/jvmpubfs/WEB/images/products/");
+        final Path uploadCSVFile = Paths.get("/Users/jbeckstrom/Desktop/product-upload.csv");
+        final Config config = new Config(Paths.get("config.properties"));
 
-//        EcommerceAdmin ecommerceAdmin = new EcommerceAdmin(driver, "https://secure2.convio.net/jvmi/admin/EcommerceAdmin");
-//        Product product = ecommerceAdmin.createProduct("test");
-//        ecommerceAdmin.updateProduct(product);
-//        
-//        System.out.println(client.productSearch("1823479128374"));
-//        System.out.println(client.doesProductExist("1823479128374"));
-        DPCSClient dpcs = new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvm");
+        Map<String, DPCSClient> dpcsClients = new HashMap<>();
+        dpcsClients.put("us", new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvm"));
+        dpcsClients.put("ca", new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvcn"));
+        dpcsClients.put("uk", new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvuk"));
+        
+        for(DPCSClient client: dpcsClients.values()){
+            client.login(config.dpcsUser(), config.dpcsPassword());
+        }
         
         LuminateFTPClient ftp = new LuminateFTPClient("customerftp.convio.net");
-        
-        ProductImages images = new ProductImages(Paths.get("/Volumes/jvmpubfs/WEB/images/products/"), ftp);
+        ftp.login(config.ftpUser(), config.ftpPassword());
+
+        ProductImages images = new ProductImages(localProductImagesPath, ftp);
 
         Map<String, LuminateOnlineClient> luminateClients = new HashMap<>();
         luminateClients.put("us", new LuminateOnlineClient("https://secure2.convio.net/jvmi/admin/"));
@@ -59,44 +77,47 @@ public class Main {
         luminateClients.put("uk", new LuminateOnlineClient("https://secure3.convio.net/jvmiuk/admin/"));
 
         Map<String, EcommerceProductFactory> ecommFactories = new HashMap<>();
-        ecommFactories.put("us", new EcommerceProductFactory(dpcs, images, Categories.us));
-        ecommFactories.put("ca", new EcommerceProductFactory(dpcs, images, Categories.ca));
-        ecommFactories.put("uk", new EcommerceProductFactory(dpcs, images, Categories.uk));
-        
-        List<String> countries = Arrays.asList("uk");//Arrays.asList("us", "ca", "uk");
+        ecommFactories.put("us", new EcommerceProductFactory(dpcsClients.get("us"), images, Categories.us));
+        ecommFactories.put("ca", new EcommerceProductFactory(dpcsClients.get("ca"), images, Categories.ca));
+        ecommFactories.put("uk", new EcommerceProductFactory(dpcsClients.get("uk"), images, Categories.uk));
 
-        
-        List<InputRecord> records = new ArrayList<>();
-        records.add(new InputRecord(
-                "ISIS Exposed, book by Erick Stakelbeck",
-                "Who is ISIS? Where did this brutal terrorist group come from and what is driving its successful campaign of murder and conquest? In ISIS Exposed, veteran investigative reporter Erick Stakelbeck gets inside the story of the new caliphate and reveals just how clear and present a threat it is. ",
-                "9164",
-                "Television Program Offers",
-                Arrays.asList("Books > Books", "Jewish Voice Resources > Books", "Offers > Television", "Study Resources > Books"),
-                Arrays.asList("Copy of WPMS", "WP", "WPM", "WPMMS", "WPMS", "WPTV", "WP - CAN", "WPM - CAN", "WPMMS-CA", "WPMS-CA", "WPTV - CAN", "WP - UK", "WPM - UK", "WPMMS-UK", "WPMS-UK", "WPTV-UK"),
-                Collections.EMPTY_LIST));
+        List<String> countries = Arrays.asList("us", "ca", "uk");
+
+        Collection<InputRecord> records = parseInput(uploadCSVFile);
 
         for (InputRecord record : records) {
-            for(String country: countries){
+            for (String country : countries) {
                 EcommerceProductFactory ecommFactory = ecommFactories.get(country);
                 LuminateOnlineClient luminateClient = luminateClients.get(country);
-                luminateClient.login(username, password);
-                
+                luminateClient.login(config.luminateUser(), config.luminatePassword());
+
                 ECommerceProduct product = ecommFactory.createECommerceProduct(record);
                 luminateClient.createOrUpdateProduct(product);
             }
         }
     }
-    
-    public static Collection<InputRecord> parseInput(Path csv) throws IOException{
+
+    public static Collection<InputRecord> parseInput(Path csv) throws IOException {
         Map<String, InputRecord> records = new HashMap<>();
-        CSVParser parser = CSVParser.parse(csv.toFile(), Charset.forName("UTF-8"), CSVFormat.EXCEL);
-        for(CSVRecord record: parser){
+        CSVParser parser = CSVParser.parse(csv.toFile(), Charset.forName("UTF-8"), CSVFormat.EXCEL.withHeader());
+
+        for (CSVRecord record : parser) {
             InputRecord input = new InputRecord(record);
             records.put(input.getId(), input);
         }
-        
-        
+
+        for (InputRecord record : records.values()) {
+            if (record.isPackage()) {
+                for (String id : record.packageIds) {
+                    if (!records.containsKey(id)) {
+                        throw new IllegalStateException("Could not find product for package id: " + id);
+                    }
+                    record.addItem(records.get(id));
+                }
+            }
+        }
+
+        return records.values();
     }
 
     public static class EcommerceProductFactory {
@@ -120,20 +141,24 @@ public class Main {
             ret.setExternalId(record.getId());
             ret.setStandardPrice(getStandardPrice(dpcsItem));
             ret.setFairMarketValue(getFairMarketPrice(dpcsItem));
-            ret.setShortDesc(record.getDescription());
+            ret.setShortDesc(getDescription(record));
             ret.setHtmlFullDesc(createFullDescriptionHtml(record, image.getUrl()));
             ret.setType(record.getType());
             ret.setImagePath(image.getPath());
             ret.setStores(record.getStores());
             ret.setCategories(getCategories(record));
+            ret.setKeywords(getKeywords(record));
 
             return ret;
         }
 
-        
-
         private Set<Integer> getCategories(InputRecord record) {
             Set<Integer> ret = new HashSet<>();
+            if (record.isPackage()) {
+                for (InputRecord child : record.getItems()) {
+                    ret.addAll(getCategories(child));
+                }
+            }
             for (String category : record.getCategories()) {
                 String[] split = category.split("\\s*>\\s*");
                 String id = categories.lookup(split);
@@ -143,9 +168,38 @@ public class Main {
             }
             return ret;
         }
+        
+        private String getKeywords(InputRecord record){
+            Set<String> keywords = new HashSet<>();
+            keywords.addAll(record.getKeywords());
+            if(record.isPackage()){
+                for(InputRecord child: record.getItems()){
+                    keywords.addAll(child.getKeywords());
+                }
+            }
+            return StringUtils.join(keywords, ",");
+        }
+
+        private String getDescription(InputRecord record) {
+            String description = record.getDescription();
+            if (StringUtils.isBlank(description) && record.isPackage()) {
+                description = record.getFirstItem().getDescription();
+            }
+            return description;
+        }
 
         private String createProductName(InputRecord record) {
-            return String.format("%s - %s", record.getId(), record.getName());
+            String name = record.getName();
+            if (StringUtils.isBlank(name) && record.isPackage()) {
+                for (InputRecord child : record.getItems()) {
+                    if (StringUtils.isBlank(name)) {
+                        name = child.getName();
+                    } else {
+                        name += " + " + child.getName();
+                    }
+                }
+            }
+            return String.format("%s - %s", record.getId(), name);
         }
 
         private BigDecimal getStandardPrice(DPCSItem dpcsItem) {
@@ -160,6 +214,9 @@ public class Main {
 
         private String createFullDescriptionHtml(InputRecord record, String imageUrl) {
             StringBuilder html = new StringBuilder();
+            if (imageUrl != null) {
+                html.append("<p>").append("<img style='max-width: 100%; height: auto; display: block;' src=").append(imageUrl).append(">").append("</p>");
+            }
             if (record.isPackage()) {
                 for (InputRecord item : record.getItems()) {
                     html.append(createShortDescriptionHtml(item, imageUrl));
@@ -172,9 +229,6 @@ public class Main {
 
         private String createShortDescriptionHtml(InputRecord record, String imageUrl) {
             StringBuilder html = new StringBuilder();
-            if (imageUrl != null) {
-                html.append("<p>").append("<img style='max-width: 100%; height: auto; display: block;' src=").append(imageUrl).append(">").append("</p>");
-            }
             html.append("<h2>").append(record.getName()).append("</h2>");
             html.append("<p>").append(record.getDescription()).append("</p>");
             return html.toString();
@@ -188,37 +242,40 @@ public class Main {
         private final String description;
         private final String id;
         private final String type;
-        private final String keywords;
-        private final Set<String> packageIds = new HashSet<>();
-        private final Set<InputRecord> items = new HashSet<>();
+        private final Set<String> keywords = new HashSet<>();
+        private final Set<String> packageIds = new LinkedHashSet<>();
+        private final Set<InputRecord> items = new LinkedHashSet<>();
         private final Set<String> categories = new HashSet<>();
         private final Set<String> stores = new HashSet<>();
 
-        public InputRecord(CSVRecord record){
-            name = record.get("name");
-            description = record.get("description");
-            id = record.get("id");
-            String itemIds = record.get("package ids");
-            if(!itemIds.isEmpty()){
-                packageIds.addAll(Arrays.asList(itemIds.split(";")));
-            }
-            type = record.get("type");
-            keywords = record.get("keywords");
-            categories.addAll(Arrays.asList(record.get("categories").split(";")));
-            stores.addAll(Arrays.asList(record.get("stores").split(";")));
+        public InputRecord(CSVRecord record) {
+            name = record.get(0);
+            description = record.get(1);
+            id = record.get(2);
+            packageIds.addAll(split(record.get(3), ";"));
+            type = record.get(4);
+            categories.addAll(split(record.get(5), ";"));
+            keywords.addAll(split(record.get(6).toLowerCase(), ","));
+            stores.addAll(split(record.get(7), ";"));
         }
         
-        public InputRecord(String name, String description, String id, String type,
-                Collection<String> categories, Collection<String> stores, Collection<InputRecord> items) {
-            this.name = name;
-            this.description = description;
-            this.id = id;
-            this.type = type;
-            this.categories.addAll(categories);
-            this.items.addAll(items);
-            this.stores.addAll(stores);
+        private Collection<String> split(String txt, String delimeter){
+            if(!txt.contains(delimeter)){
+                return Collections.EMPTY_LIST;
+            }
+            return Arrays.asList(txt.split("\\s*"+delimeter+"\\s*"));
         }
 
+//        public InputRecord(String name, String description, String id, String type,
+//                Collection<String> categories, Collection<String> stores, Collection<InputRecord> items) {
+//            this.name = name;
+//            this.description = description;
+//            this.id = id;
+//            this.type = type;
+//            this.categories.addAll(categories);
+//            this.items.addAll(items);
+//            this.stores.addAll(stores);
+//        }
         public String getName() {
             return name;
         }
@@ -236,18 +293,25 @@ public class Main {
         }
 
         public boolean isPackage() {
-            return !items.isEmpty();
+            return !packageIds.isEmpty();
         }
 
         public Set<String> getCategories() {
             return categories;
         }
 
+        public InputRecord getFirstItem() {
+            if (!items.isEmpty()) {
+                return items.iterator().next();
+            }
+            return null;
+        }
+
         public Set<InputRecord> getItems() {
             return items;
         }
-        
-        public void addItem(InputRecord item){
+
+        public void addItem(InputRecord item) {
             items.add(item);
         }
 
@@ -258,7 +322,16 @@ public class Main {
         public Set<String> getPackageIds() {
             return packageIds;
         }
+
+        public Set<String> getKeywords() {
+            return keywords;
+        }
         
+        @Override
+        public String toString() {
+            return "InputRecord{" + "name=" + name + ", description=" + description + ", id=" + id + ", type=" + type + ", keywords=" + keywords + ", packageIds=" + packageIds + ", items=" + items + ", categories=" + categories + ", stores=" + stores + '}';
+        }
+
     }
 
     public static class InputData {
