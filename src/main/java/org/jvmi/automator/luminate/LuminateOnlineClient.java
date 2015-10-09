@@ -115,9 +115,9 @@ public class LuminateOnlineClient {
         if (product.getExternalId() == null) {
             throw new IllegalStateException("Product External ID must not be null!");
         }
-        if (product.getStores().isEmpty()) {
-            throw new IllegalStateException("At least one store must be defined for a product!");
-        }
+//        if (product.getStores().isEmpty()) {
+//            throw new IllegalStateException("At least one store must be defined for a product!");
+//        }
         if (product.getStandardPrice().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalStateException("Standard Price must be greater than zero! (Standard Price = " + product.getStandardPrice() + ")");
         }

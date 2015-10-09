@@ -39,33 +39,33 @@ import org.jvmi.automator.luminate.LuminateOnlineClient;
  * @author jbeckstrom
  */
 public class Main {
-    
-    /*
-    publish date
-    expiration date
-    priority
-    keywords
-    short description
-    excludes list
-    check for images only
-    intelligent error handling
-    */
 
+    /*
+     publish date
+     expiration date
+     priority
+     keywords
+     short description
+     excludes list
+     check for images only
+     intelligent error handling
+    retry 3 times
+     */
     public static void main(String[] args) throws IOException {
 
-        final Path localProductImagesPath = Paths.get("/Users/jbeckstrom/Desktop/products/");//Paths.get("/Volumes/jvmpubfs/WEB/images/products/");
-        final Path uploadCSVFile = Paths.get("/Users/jbeckstrom/Desktop/product-upload.csv");
-        final Config config = new Config(Paths.get("config.properties"));
+        final Path localProductImagesPath = Paths.get("/Volumes/jvmpubfs/WEB/images/products/");
+        final Path uploadCSVFile = Paths.get("/Users/jbabic/Desktop/product-uploads.csv");
+        final Config config = new Config(Paths.get("../config.properties"));
 
         Map<String, DPCSClient> dpcsClients = new HashMap<>();
         dpcsClients.put("us", new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvm"));
         dpcsClients.put("ca", new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvcn"));
         dpcsClients.put("uk", new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvuk"));
-        
-        for(DPCSClient client: dpcsClients.values()){
+
+        for (DPCSClient client : dpcsClients.values()) {
             client.login(config.dpcsUser(), config.dpcsPassword());
         }
-        
+
         LuminateFTPClient ftp = new LuminateFTPClient("customerftp.convio.net");
         ftp.login(config.ftpUser(), config.ftpPassword());
 
@@ -87,19 +87,29 @@ public class Main {
 
         for (InputRecord record : records) {
             for (String country : countries) {
-                EcommerceProductFactory ecommFactory = ecommFactories.get(country);
-                LuminateOnlineClient luminateClient = luminateClients.get(country);
-                luminateClient.login(config.luminateUser(), config.luminatePassword());
+                if (record.ignore(country)) {
+                    System.out.println("IGNORE: " + country + " " + record);
+                    continue;
+                }
+                try {
+                    EcommerceProductFactory ecommFactory = ecommFactories.get(country);
+                    LuminateOnlineClient luminateClient = luminateClients.get(country);
+                    luminateClient.login(config.luminateUser(), config.luminatePassword());
 
-                ECommerceProduct product = ecommFactory.createECommerceProduct(record);
-                luminateClient.createOrUpdateProduct(product);
+                    ECommerceProduct product = ecommFactory.createECommerceProduct(record);
+                    luminateClient.createOrUpdateProduct(product);
+                } catch (Exception e) {
+                    System.out.println("ERROR: " + country + " " + record);
+                    System.out.println(e.getMessage());
+//                    e.printStackTrace();
+                }
             }
         }
     }
 
     public static Collection<InputRecord> parseInput(Path csv) throws IOException {
         Map<String, InputRecord> records = new HashMap<>();
-        CSVParser parser = CSVParser.parse(csv.toFile(), Charset.forName("UTF-8"), CSVFormat.EXCEL.withHeader());
+        CSVParser parser = CSVParser.parse(csv.toFile(), Charset.forName("UTF-8"), CSVFormat.DEFAULT.withHeader());
 
         for (CSVRecord record : parser) {
             InputRecord input = new InputRecord(record);
@@ -133,14 +143,13 @@ public class Main {
         }
 
         public ECommerceProduct createECommerceProduct(InputRecord record) throws IOException {
-            final DPCSItem dpcsItem = dpcs.search(record.getId());
             final ProductImage image = images.getProductImage(record.getId());
 
             ECommerceProduct ret = new ECommerceProduct();
             ret.setName(createProductName(record));
             ret.setExternalId(record.getId());
-            ret.setStandardPrice(getStandardPrice(dpcsItem));
-            ret.setFairMarketValue(getFairMarketPrice(dpcsItem));
+            ret.setStandardPrice(getStandardPrice(record));
+            ret.setFairMarketValue(getFairMarketPrice(record));
             ret.setShortDesc(getDescription(record));
             ret.setHtmlFullDesc(createFullDescriptionHtml(record, image.getUrl()));
             ret.setType(record.getType());
@@ -168,12 +177,12 @@ public class Main {
             }
             return ret;
         }
-        
-        private String getKeywords(InputRecord record){
+
+        private String getKeywords(InputRecord record) {
             Set<String> keywords = new HashSet<>();
             keywords.addAll(record.getKeywords());
-            if(record.isPackage()){
-                for(InputRecord child: record.getItems()){
+            if (record.isPackage()) {
+                for (InputRecord child : record.getItems()) {
                     keywords.addAll(child.getKeywords());
                 }
             }
@@ -202,14 +211,24 @@ public class Main {
             return String.format("%s - %s", record.getId(), name);
         }
 
-        private BigDecimal getStandardPrice(DPCSItem dpcsItem) {
-            BigDecimal retail = dpcsItem.getRetailPrice();
-            BigDecimal offer = dpcsItem.getOfferPrice();
-            return retail.compareTo(BigDecimal.ZERO) == 0 ? offer : retail;
+        private BigDecimal getStandardPrice(InputRecord record) {
+            if (record.getPrice().equals(BigDecimal.ZERO)) {
+                final DPCSItem dpcsItem = dpcs.search(record.getId());
+                BigDecimal retail = dpcsItem.getRetailPrice();
+                BigDecimal offer = dpcsItem.getOfferPrice();
+                return offer.compareTo(BigDecimal.ZERO) == 0 ? retail : offer;
+            } else {
+                return record.getPrice();
+            }
         }
 
-        private BigDecimal getFairMarketPrice(DPCSItem dpcsItem) {
-            return dpcsItem.getFairMarketValue();
+        private BigDecimal getFairMarketPrice(InputRecord record) {
+            if (record.getFmv().equals(BigDecimal.ZERO)) {
+                final DPCSItem dpcsItem = dpcs.search(record.getId());
+                return dpcsItem.getFairMarketValue();
+            } else {
+                return record.getFmv();
+            }
         }
 
         private String createFullDescriptionHtml(InputRecord record, String imageUrl) {
@@ -229,8 +248,12 @@ public class Main {
 
         private String createShortDescriptionHtml(InputRecord record, String imageUrl) {
             StringBuilder html = new StringBuilder();
-            html.append("<h2>").append(record.getName()).append("</h2>");
-            html.append("<p>").append(record.getDescription()).append("</p>");
+            if (StringUtils.isBlank(record.getFullDescription())) {
+                html.append("<h2 style='margin-top:15px;margin-bottom:15px;'>").append(record.getName()).append("</h2>");
+                html.append("<p>").append(record.getDescription()).append("</p>");
+            } else {
+                html.append(record.getFullDescription());
+            }
             return html.toString();
         }
 
@@ -240,42 +263,54 @@ public class Main {
 
         private final String name;
         private final String description;
+        private final String fullDescription;
         private final String id;
         private final String type;
+        private final BigDecimal fmv;
+        private final BigDecimal price;
         private final Set<String> keywords = new HashSet<>();
         private final Set<String> packageIds = new LinkedHashSet<>();
         private final Set<InputRecord> items = new LinkedHashSet<>();
         private final Set<String> categories = new HashSet<>();
         private final Set<String> stores = new HashSet<>();
+        private final Set<String> ignoreCountries = new HashSet<>();
 
         public InputRecord(CSVRecord record) {
-            name = record.get(0);
-            description = record.get(1);
-            id = record.get(2);
-            packageIds.addAll(split(record.get(3), ";"));
-            type = record.get(4);
-            categories.addAll(split(record.get(5), ";"));
-            keywords.addAll(split(record.get(6).toLowerCase(), ","));
-            stores.addAll(split(record.get(7), ";"));
-        }
-        
-        private Collection<String> split(String txt, String delimeter){
-            if(!txt.contains(delimeter)){
-                return Collections.EMPTY_LIST;
-            }
-            return Arrays.asList(txt.split("\\s*"+delimeter+"\\s*"));
+            id = record.get(0);
+            name = record.get(1);
+            description = record.get(2);
+            fullDescription = record.get(3);
+            fmv = parseAmount(record.get(4));
+            price = parseAmount(record.get(5));
+            packageIds.addAll(split(record.get(6), ";"));
+            type = record.get(7);
+            categories.addAll(split(record.get(8), ";"));
+            keywords.addAll(split(record.get(9).toLowerCase(), ","));
+            stores.addAll(split(record.get(10), ";"));
+            ignoreCountries.addAll(split(record.get(11), ";"));
         }
 
-//        public InputRecord(String name, String description, String id, String type,
-//                Collection<String> categories, Collection<String> stores, Collection<InputRecord> items) {
-//            this.name = name;
-//            this.description = description;
-//            this.id = id;
-//            this.type = type;
-//            this.categories.addAll(categories);
-//            this.items.addAll(items);
-//            this.stores.addAll(stores);
-//        }
+        private boolean parseBoolean(String txt) {
+            if (StringUtils.isBlank(txt)) {
+                return false;
+            }
+            return Boolean.parseBoolean(txt);
+        }
+
+        private BigDecimal parseAmount(String txt) {
+            if (StringUtils.isBlank(txt)) {
+                return BigDecimal.ZERO;
+            }
+            return new BigDecimal(txt);
+        }
+
+        private Collection<String> split(String txt, String delimeter) {
+            if (StringUtils.isBlank(txt)) {
+                return Collections.EMPTY_LIST;
+            }
+            return Arrays.asList(txt.split("\\s*" + delimeter + "\\s*"));
+        }
+
         public String getName() {
             return name;
         }
@@ -326,7 +361,23 @@ public class Main {
         public Set<String> getKeywords() {
             return keywords;
         }
-        
+
+        public String getFullDescription() {
+            return fullDescription;
+        }
+
+        public BigDecimal getFmv() {
+            return fmv;
+        }
+
+        public BigDecimal getPrice() {
+            return price;
+        }
+
+        public boolean ignore(String country) {
+            return ignoreCountries.contains(country);
+        }
+
         @Override
         public String toString() {
             return "InputRecord{" + "name=" + name + ", description=" + description + ", id=" + id + ", type=" + type + ", keywords=" + keywords + ", packageIds=" + packageIds + ", items=" + items + ", categories=" + categories + ", stores=" + stores + '}';
