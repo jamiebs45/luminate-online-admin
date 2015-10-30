@@ -45,6 +45,10 @@ public class DPCSClient {
         login.click();
     }
     
+    public void close(){
+        driver.quit();
+    }
+    
     public DPCSItem search(String id){
         DPCSItem ret = cache.get(id);
         if(ret==null){

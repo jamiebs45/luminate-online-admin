@@ -8,11 +8,14 @@ package org.jvmi.automator.luminate;
 import com.me.jvmi.Main;
 import com.me.jvmi.SelectElement;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
@@ -29,9 +32,9 @@ public class LuminateOnlineClient {
 
     private boolean loggedIn = false;
 
-    public LuminateOnlineClient(String uri) {
+    public LuminateOnlineClient(String uri, int seconds) {
         driver = new FirefoxDriver();
-        driver.manage().timeouts().implicitlyWait(10, TimeUnit.SECONDS);
+        driver.manage().timeouts().implicitlyWait(seconds, TimeUnit.SECONDS);
         this.uri = uri;
     }
 
@@ -48,9 +51,55 @@ public class LuminateOnlineClient {
         login.click();
         loggedIn = true;
     }
+    
+    public void close(){
+        driver.quit();
+    }
+    
+    public void editDonationForm(String donFormId, String campaignId){
+        driver.get(uri + "Donation2Admin?autores_obj_id=&df_id="+donFormId+"&don.admin=form_autoresp_ed.cf&autores_obj_id_param_name=df_id&autores_type_id=&autores_app_id=9&action=action_configure_autoresponders&dc_id="+campaignId);
+        //https://secure2.convio.net/jvmi/admin/Donation2Admin?df_id=8840&don.admin=form_ed_id.cf&action=edit&dc_id=2221
+        
+        //auto respondeer screen
+        //https://secure2.convio.net/jvmi/admin/Donation2Admin?autores_obj_id=&df_id=8840&don.admin=form_autoresp_ed.cf&autores_obj_id_param_name=df_id&autores_type_id=&autores_app_id=9&action=action_configure_autoresponders&dc_id=2221
+    
+        //look for edit links
+        List<String> editUrls = new ArrayList<>();
+        for(WebElement link: driver.findElements(By.linkText("Edit"))){
+            editUrls.add(link.getAttribute("href"));
+        }
+        
+        for(String editUrl: editUrls){
+            driver.get(editUrl);
+            WebElement emailField = driver.findElement(By.id("emailname"));
+            WebElement submit = driver.findElement(By.id("pstep_next-button"));
+            clearAndSendKeys(emailField, "partnerservices@jewishvoice.org");
+            submit.click();
+        }
+        
+    }
+    
+    public Collection<String> donFormSearch(String queryText, boolean pageinate) {
+        List<String> ret = new ArrayList<>();
 
-    public Collection<String> productSearch(String queryText) {
-        Set<String> ret = new HashSet<>();
+        driver.get(uri + "Donation2Admin?don.admin=all_form_list_pa");
+        WebElement searchField = driver.findElement(By.id("filter_text"));
+        WebElement searchButton = driver.findElement(By.id("filter_search"));
+        searchField.clear();
+        searchField.sendKeys(queryText);
+        searchButton.click();
+
+        ret.addAll(parseDonationForms());
+        while(pageinate && !isLastPage()){
+            driver.findElement(By.linkText("Next")).click();
+            ret.addAll(parseDonationForms());
+        }
+
+        return ret;
+    }
+
+    public Collection<ProductShort> productSearch(String queryText, boolean pageinate) {
+        List<ProductShort> ret = new ArrayList<>();
 
         driver.get(uri + "EcommerceAdmin?ecommerce=prod_list");
         WebElement searchField = driver.findElement(By.id("filter_text"));
@@ -59,17 +108,74 @@ public class LuminateOnlineClient {
         searchField.sendKeys(queryText);
         searchButton.click();
 
+        ret.addAll(parseProducts());
+        while(pageinate && !isLastPage()){
+            driver.findElement(By.linkText("Next")).click();
+            ret.addAll(parseProducts());
+        }
+
+        return ret;
+    }
+    
+    private boolean isLastPage(){
+        //Records 1 - 20 of 2,000
+        try{
+            String text = driver.findElement(By.xpath("//p[starts-with(text(),'Records')]")).getText();
+        
+            Pattern p = Pattern.compile("Records ([0-9,]+) - ([0-9,]+) of ([0-9,]+)");
+            Matcher m = p.matcher(text);
+            if(m.find()){
+                String of = m.group(2);
+                String total = m.group(3);
+                return of.equals(total);
+            }else{
+                throw new IllegalStateException("Could not find 'Records' on page!");
+            }
+        }catch(Exception e){
+            System.out.println(e.getMessage());
+            return false;
+        }
+    }
+    
+    private List<String> parseDonationForms(){
+        List<String> ret = new ArrayList<>();
         try {
-            Collection<WebElement> elements = driver.findElements(By.cssSelector("table[id^='lct'] tr .ObjectId"));
+            
+            for(WebElement link: driver.findElements(By.linkText("Edit"))){
+            ret.add(link.getAttribute("href"));
+        }
+            
+//            Collection<WebElement> elements = driver.findElements(By.cssSelector("tr[class^='lc_Row']"));
+//            for (WebElement element : elements) {
+//                List<WebElement> cells = element.findElements(By.cssSelector("td[id^='lc_cell']"));
+//                if(cells.size()==7){
+//                    String id = cells.get(0).findElement(By.className("ObjectId")).getText().trim();
+//                    id = id.replaceAll("Form ID:\\s+", "");
+//                    ret.add(id.trim());
+//                }
+//            }
+        } catch (Exception e) {
+            //ignore
+        }
+        return ret;
+    }
+    
+    private List<ProductShort> parseProducts(){
+        List<ProductShort> ret = new ArrayList<>();
+        try {
+            Collection<WebElement> elements = driver.findElements(By.cssSelector("tr[class^='lc_Row']"));
             for (WebElement element : elements) {
-                String text = element.getText().trim();
-                String[] split = text.split(":");
-                ret.add(split[1].trim());
+                List<WebElement> cells = element.findElements(By.cssSelector("td[id^='lc_cell']"));
+                if(cells.size()==5){
+                    String id = cells.get(0).findElement(By.className("ObjectId")).getText().trim();
+                    id = id.replaceAll("ID:\\s+", "");
+                    String active = cells.get(2).getText().trim();
+                    ret.add(new ProductShort(id, active.equalsIgnoreCase("Active")));
+                }
             }
         } catch (Exception e) {
             //ignore
         }
-
         return ret;
     }
 
@@ -89,10 +195,10 @@ public class LuminateOnlineClient {
             return false;
         }
     }
-
+    
     public void createOrUpdateProduct(ECommerceProduct product) {
         validateProduct(product);
-        Collection<String> ids = productSearch(product.getExternalId());
+        Collection<ProductShort> ids = productSearch(product.getExternalId(), false);
         if (ids.size() > 1) {
             throw new IllegalStateException("More than one product with an external id '" + product.getExternalId() + "' exists!");
         }
@@ -100,7 +206,7 @@ public class LuminateOnlineClient {
         if (ids.isEmpty()) {
             createProduct(product);
         } else {
-            product.setId(ids.iterator().next());
+            product.setId(ids.iterator().next().getId());
             doNameStep(product);
         }
         doPricingStep(product);
@@ -140,11 +246,13 @@ public class LuminateOnlineClient {
         //https://secure2.convio.net/jvmi/admin/EcommerceAdmin?prod_id=0&ecommerce=prod_create
         driver.get(uri + "EcommerceAdmin?prod_id=" + product.getId() + "&ecommerce=prod_create");
 
-        WebElement nameField = driver.findElement(By.id("product_namename"));
         WebElement externalIdField = driver.findElement(By.id("product_external_idname"));
-
-        clearAndSendKeys(nameField, product.getName());
         clearAndSendKeys(externalIdField, product.getExternalId());
+        
+        WebElement nameField = driver.findElement(By.id("product_namename"));
+        clearAndSendKeys(nameField, product.getName());
+        
+        
 
         if (product.expires()) {
             WebElement enableExpirationDateCheckBox = driver.findElement(By.id("enable_expiration_datename"));
@@ -169,9 +277,9 @@ public class LuminateOnlineClient {
         driver.get(uri + "EcommerceAdmin?prod_id=" + product.getId() + "&ecommerce=prod_create_pricing");
 
         WebElement standardPriceField = driver.findElement(By.id("standard_priceinput"));
-        WebElement fairMarketValueField = driver.findElement(By.id("fair_market_valueinput"));
-
         clearAndSendKeys(standardPriceField, product.getStandardPrice().toPlainString());
+        
+        WebElement fairMarketValueField = driver.findElement(By.id("fair_market_valueinput"));
         clearAndSendKeys(fairMarketValueField, product.getFairMarketValue().toPlainString());
 
         driver.findElement(By.id("pstep_save-button")).click();
@@ -268,4 +376,14 @@ public class LuminateOnlineClient {
         element.sendKeys(text);
     }
 
+    public static void main(String[] args){
+        String text = "Records 1 - 20 of 2,000";
+        Pattern p = Pattern.compile("Records ([0-9,]+) - ([0-9,]+) of ([0-9,]+)");
+        Matcher m = p.matcher(text);
+        if(m.find()){
+            String of = m.group(2);
+            String total = m.group(3);
+            System.out.println(of+" "+total);
+        }
+    }
 }

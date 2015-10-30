@@ -6,8 +6,13 @@
 package com.me.jvmi;
 
 import com.me.jvmi.ProductImages.ProductImage;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.nio.charset.Charset;
 import java.nio.file.DirectoryStream;
@@ -25,14 +30,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.jvmi.automator.dpcs.DPCSClient;
 import org.jvmi.automator.dpcs.DPCSItem;
 import org.jvmi.automator.luminate.ECommerceProduct;
 import org.jvmi.automator.luminate.LuminateOnlineClient;
+import org.jvmi.automator.luminate.ProductShort;
 
 /**
  *
@@ -41,6 +51,7 @@ import org.jvmi.automator.luminate.LuminateOnlineClient;
 public class Main {
 
     /*
+     get prices from dpcs in first pass
      publish date
      expiration date
      priority
@@ -49,14 +60,70 @@ public class Main {
      excludes list
      check for images only
      intelligent error handling
-    retry 3 times
+     retry 3 times
      */
     public static void main(String[] args) throws IOException {
 
         final Path localProductImagesPath = Paths.get("/Volumes/jvmpubfs/WEB/images/products/");
-        final Path uploadCSVFile = Paths.get("/Users/jbabic/Desktop/product-uploads.csv");
+        final Path uploadCSVFile = Paths.get("/Users/jbabic/Documents/products/upload.csv");
         final Config config = new Config(Paths.get("../config.properties"));
 
+        LuminateOnlineClient luminateClient2 = new LuminateOnlineClient("https://secure2.convio.net/jvmi/admin/", 3);
+        luminateClient2.login(config.luminateUser(), config.luminatePassword());
+        
+   
+        Set<String> completed = new HashSet<>( IOUtils.readLines(Files.newBufferedReader(Paths.get("completed.txt"))) );
+        
+        
+        try(InputStream is = Files.newInputStream(Paths.get("donforms.csv"));
+                PrintWriter pw = new PrintWriter(new FileOutputStream(new File("completed.txt"), true))){
+            
+            for(String line : IOUtils.readLines(is)){
+                if(completed.contains(line)){
+                    System.out.println("completed: "+line);
+                    continue;
+                }
+                try{
+                    luminateClient2.editDonationForm(line, "-1");
+                    pw.println(line);
+                    System.out.println("done: "+line);
+                    pw.flush();
+                }catch(Exception e){
+                    System.out.println("skipping: "+line);
+                    e.printStackTrace();
+                }
+            }
+        }
+        
+        
+        
+//        luminateClient2.editDonationForm("8840", "-1");
+//        Collection<String> ids = luminateClient2.donFormSearch("", true);
+//        
+//        CSVFormat csvFileFormat = CSVFormat.DEFAULT.withRecordSeparator("\n");
+//        try (FileWriter fileWriter = new FileWriter(new File("donforms.csv"));
+//                CSVPrinter csvFilePrinter = new CSVPrinter(fileWriter, csvFileFormat);) {
+//
+//            for (String id : ids) {
+//                csvFilePrinter.printRecord(id);
+//            }
+//        }
+//        
+        
+        if(true){
+            return;
+        }
+
+        
+        Collection<InputRecord> records = parseInput(uploadCSVFile);
+        
+        LuminateFTPClient ftp = new LuminateFTPClient("customerftp.convio.net");
+        ftp.login(config.ftpUser(), config.ftpPassword());
+
+        ProductImages images = new ProductImages(localProductImagesPath, ftp);
+        
+        validateImages(records, images);
+        
         Map<String, DPCSClient> dpcsClients = new HashMap<>();
         dpcsClients.put("us", new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvm"));
         dpcsClients.put("ca", new DPCSClient("https://donor.dpconsulting.com/NewDDI/Logon.asp?client=jvcn"));
@@ -66,15 +133,10 @@ public class Main {
             client.login(config.dpcsUser(), config.dpcsPassword());
         }
 
-        LuminateFTPClient ftp = new LuminateFTPClient("customerftp.convio.net");
-        ftp.login(config.ftpUser(), config.ftpPassword());
-
-        ProductImages images = new ProductImages(localProductImagesPath, ftp);
-
         Map<String, LuminateOnlineClient> luminateClients = new HashMap<>();
-        luminateClients.put("us", new LuminateOnlineClient("https://secure2.convio.net/jvmi/admin/"));
-        luminateClients.put("ca", new LuminateOnlineClient("https://secure3.convio.net/jvmica/admin/"));
-        luminateClients.put("uk", new LuminateOnlineClient("https://secure3.convio.net/jvmiuk/admin/"));
+        luminateClients.put("us", new LuminateOnlineClient("https://secure2.convio.net/jvmi/admin/", 10));
+        luminateClients.put("ca", new LuminateOnlineClient("https://secure3.convio.net/jvmica/admin/", 10));
+        luminateClients.put("uk", new LuminateOnlineClient("https://secure3.convio.net/jvmiuk/admin/", 10));
 
         Map<String, EcommerceProductFactory> ecommFactories = new HashMap<>();
         ecommFactories.put("us", new EcommerceProductFactory(dpcsClients.get("us"), images, Categories.us));
@@ -83,8 +145,9 @@ public class Main {
 
         List<String> countries = Arrays.asList("us", "ca", "uk");
 
-        Collection<InputRecord> records = parseInput(uploadCSVFile);
+        
 
+        boolean error = false;
         for (InputRecord record : records) {
             for (String country : countries) {
                 if (record.ignore(country)) {
@@ -100,10 +163,37 @@ public class Main {
                     luminateClient.createOrUpdateProduct(product);
                 } catch (Exception e) {
                     System.out.println("ERROR: " + country + " " + record);
-                    System.out.println(e.getMessage());
-//                    e.printStackTrace();
+                    //System.out.println(e.getMessage());
+                    error = true;
+                    e.printStackTrace();
                 }
             }
+        }
+
+        if (!error) {
+            for (String country : countries) {
+                LuminateOnlineClient luminateClient = luminateClients.get(country);
+                DPCSClient dpcsClient = dpcsClients.get(country);
+                luminateClient.close();
+                dpcsClient.close();
+            }
+        }
+    }
+    
+    public static void validateImages(Collection<InputRecord> records, ProductImages images){
+        List<Exception> exceptions = new ArrayList<>();
+        for(InputRecord record: records){
+            try {
+                images.getProductImage(record.getId());
+            } catch (Exception ex) {
+                exceptions.add(ex);
+            }
+        }
+        if(!exceptions.isEmpty()){
+            for(Exception e: exceptions){
+                e.printStackTrace();
+            }
+            throw new IllegalStateException("Could not find product images!");
         }
     }
 
@@ -276,18 +366,19 @@ public class Main {
         private final Set<String> ignoreCountries = new HashSet<>();
 
         public InputRecord(CSVRecord record) {
-            id = record.get(0);
-            name = record.get(1);
-            description = record.get(2);
-            fullDescription = record.get(3);
-            fmv = parseAmount(record.get(4));
-            price = parseAmount(record.get(5));
-            packageIds.addAll(split(record.get(6), ";"));
-            type = record.get(7);
-            categories.addAll(split(record.get(8), ";"));
-            keywords.addAll(split(record.get(9).toLowerCase(), ","));
-            stores.addAll(split(record.get(10), ";"));
-            ignoreCountries.addAll(split(record.get(11), ";"));
+            int index = 0;
+            id = record.get(index++);
+            name = record.get(index++);
+            description = record.get(index++);
+            fullDescription = record.get(index++);
+            packageIds.addAll(split(record.get(index++), ";"));
+            fmv = parseAmount(record.get(index++));
+            price = parseAmount(record.get(index++));
+            type = record.get(index++);
+            categories.addAll(split(record.get(index++), ";"));
+            keywords.addAll(split(record.get(index++).toLowerCase(), ","));
+            stores.addAll(split(record.get(index++), ";"));
+            ignoreCountries.addAll(split(record.get(index++), ";"));
         }
 
         private boolean parseBoolean(String txt) {
